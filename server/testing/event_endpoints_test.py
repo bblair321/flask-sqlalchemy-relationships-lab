@@ -1,32 +1,70 @@
-from app import app
-from models import *
+import pytest
+from app import app, db
+from models import Event, Session, Speaker, Bio
+import datetime
 
-def test_get_events(test_client):
+@pytest.fixture(scope='module')
+def test_client():
+    app.config['TESTING'] = True
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+    with app.test_client() as client:
+        with app.app_context():
+            db.create_all()
+            event1 = Event(name="Tech Future Conference", location="New York")
+            event2 = Event(name="AI World Summit", location="San Francisco")
+            db.session.add_all([event1, event2])
+            db.session.commit()
+
+            session1 = Session(title="Building Scalable Web Apps", start_time=datetime.datetime(2023, 9, 15, 10, 0), event=event1)
+            session2 = Session(title="Intro to Machine Learning", start_time=datetime.datetime(2023, 9, 15, 14, 0), event=event1)
+            db.session.add_all([session1, session2])
+            db.session.commit()
+
+            speaker1 = Speaker(name="Alex Johnson")
+            speaker2 = Speaker(name="Riley Chen")
+            db.session.add_all([speaker1, speaker2])
+            db.session.commit()
+
+            bio1 = Bio(bio_text="Expert in scalable backend systems with 10+ years of experience.", speaker=speaker1)
+            db.session.add(bio1)
+            db.session.commit()
+
+            session1.speakers.append(speaker1)
+            db.session.commit()
+
+        yield client
+        with app.app_context():
+            db.drop_all()
+
+def test_get_events_success(test_client):
     response = test_client.get("/events")
     assert response.status_code == 200
-    data = response.get_json()
-    assert isinstance(data, list)
-    for event in data:
-        assert "id" in event
-        assert "name" in event
-        assert "location" in event
-
+    events = response.get_json()
+    assert isinstance(events, list)
+    assert len(events) > 0
+    assert events[0]["name"] == "Tech Future Conference" 
 
 def test_get_event_sessions_success(test_client):
-    event = db.session.query(Event).first()
+    event = db.session.query(Event).filter_by(name="Tech Future Conference").first() 
     response = test_client.get(f"/events/{event.id}/sessions")
     assert response.status_code == 200
-    sessions = response.get_json()
-    assert isinstance(sessions, list)
-    for session in sessions:
-        assert "id" in session
-        assert "title" in session
-        assert "start_time" in session
-
+    data = response.get_json()
+    assert isinstance(data, dict)
+    assert "sessions" in data
+    assert isinstance(data["sessions"], list)
+    assert len(data["sessions"]) > 0
+    assert data["event_id"] == event.id
+    assert data["event_name"] == event.name
+    
+    first_session = data["sessions"][0]
+    assert "id" in first_session
+    assert "title" in first_session
+    assert "start_time" in first_session
+    assert "speakers" in first_session
+    assert isinstance(first_session["speakers"], list)
 
 def test_get_event_sessions_not_found(test_client):
     response = test_client.get("/events/9999/sessions")
     assert response.status_code == 404
     data = response.get_json()
-    assert data == {"error": "Event not found"}
-
+    assert data == {"message": "Event with id 9999 not found"}
